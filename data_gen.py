@@ -14,6 +14,7 @@ Pipeline:
      dynamic range, which neural networks dislike),
   5. save everything to one .npz file.
 """
+
 import numpy as np
 from scipy.integrate import solve_ivp
 
@@ -31,15 +32,17 @@ def split_state(s):
 
 
 def join_state(pos, vel):
-    return np.concatenate([pos.reshape(pos.shape[:-2] + (6,)),
-                           vel.reshape(vel.shape[:-2] + (6,))], axis=-1)
+    return np.concatenate(
+        [pos.reshape(pos.shape[:-2] + (6,)), vel.reshape(vel.shape[:-2] + (6,))],
+        axis=-1,
+    )
 
 
 def accelerations(pos, m=MASSES):
     """pos (3,2) -> acceleration (3,2) from Newtonian gravity."""
-    d = pos[None, :, :] - pos[:, None, :]            # d[i,j] = r_j - r_i
-    r3 = (d ** 2).sum(-1) ** 1.5
-    np.fill_diagonal(r3, 1.0)                        # avoid 0/0 on the diagonal
+    d = pos[None, :, :] - pos[:, None, :]  # d[i,j] = r_j - r_i
+    r3 = (d**2).sum(-1) ** 1.5
+    np.fill_diagonal(r3, 1.0)  # avoid 0/0 on the diagonal
     w = G * m[None, :] / r3
     np.fill_diagonal(w, 0.0)
     return (w[:, :, None] * d).sum(1)
@@ -53,18 +56,22 @@ def rhs(t, s):
 def total_energy(s, m=MASSES):
     """Total energy for state(s) of shape (…,12)."""
     pos, vel = split_state(s)
-    kin = 0.5 * (m * (vel ** 2).sum(-1)).sum(-1)
+    kin = 0.5 * (m * (vel**2).sum(-1)).sum(-1)
     pot = 0.0
     for i in range(3):
         for j in range(i + 1, 3):
-            pot = pot - G * m[i] * m[j] / np.linalg.norm(pos[..., i, :] - pos[..., j, :], axis=-1)
+            pot = pot - G * m[i] * m[j] / np.linalg.norm(
+                pos[..., i, :] - pos[..., j, :], axis=-1
+            )
     return kin + pot
 
 
 def min_pair_distance(s):
     pos, _ = split_state(s)
-    ds = [np.linalg.norm(pos[..., i, :] - pos[..., j, :], axis=-1)
-          for i, j in ((0, 1), (0, 2), (1, 2))]
+    ds = [
+        np.linalg.norm(pos[..., i, :] - pos[..., j, :], axis=-1)
+        for i, j in ((0, 1), (0, 2), (1, 2))
+    ]
     return np.min(ds, axis=0)
 
 
@@ -74,7 +81,9 @@ def max_radius(s):
 
 
 # ---------------------------------------------------------- initial conditions
-def sample_initial_condition(rng, E0=-0.5, pos_scale=1.0, r_min_init=0.3, max_tries=1000):
+def sample_initial_condition(
+    rng, E0=-0.5, pos_scale=1.0, r_min_init=0.3, max_tries=1000
+):
     """Random planar IC in the COM frame with total energy exactly E0.
 
     Positions ~ N(0, pos_scale^2), velocity directions random; the velocity
@@ -83,16 +92,16 @@ def sample_initial_condition(rng, E0=-0.5, pos_scale=1.0, r_min_init=0.3, max_tr
     """
     for _ in range(max_tries):
         pos = rng.normal(0.0, pos_scale, size=(3, 2))
-        pos -= pos.mean(0)                           # COM at origin (equal masses)
+        pos -= pos.mean(0)  # COM at origin (equal masses)
         if min_pair_distance(join_state(pos, np.zeros((3, 2)))) < r_min_init:
             continue
-        U = total_energy(join_state(pos, np.zeros((3, 2))))   # potential only
+        U = total_energy(join_state(pos, np.zeros((3, 2))))  # potential only
         K_needed = E0 - U
-        if K_needed <= 0:                            # cannot reach E0 (too compact)
+        if K_needed <= 0:  # cannot reach E0 (too compact)
             continue
         vel = rng.normal(size=(3, 2))
-        vel -= vel.mean(0)                           # zero total momentum
-        K = 0.5 * (MASSES * (vel ** 2).sum(-1)).sum()
+        vel -= vel.mean(0)  # zero total momentum
+        K = 0.5 * (MASSES * (vel**2).sum(-1)).sum()
         vel *= np.sqrt(K_needed / K)
         s0 = join_state(pos, vel)
         assert abs(total_energy(s0) - E0) < 1e-9
@@ -105,17 +114,27 @@ def simulate(s0, T, dt, rtol=1e-10, atol=1e-12, r_escape=6.0, r_close=0.05):
     """Integrate from s0 over [0,T], sampled every dt.
     Returns (traj (n,12), t (n,)) truncated at the first escape / close encounter."""
     t_eval = np.arange(0.0, T + 1e-12, dt)
-    sol = solve_ivp(rhs, (0.0, T), s0, method="DOP853", t_eval=t_eval, rtol=rtol, atol=atol)
+    sol = solve_ivp(
+        rhs, (0.0, T), s0, method="DOP853", t_eval=t_eval, rtol=rtol, atol=atol
+    )
     traj = sol.y.T
     bad = (max_radius(traj) > r_escape) | (min_pair_distance(traj) < r_close)
     if bad.any():
         k = int(np.argmax(bad))
         traj = traj[:k]
-    return traj, t_eval[:len(traj)]
+    return traj, t_eval[: len(traj)]
 
 
-def generate_dataset(n_traj=200, T=20.0, dt=0.01, E0=-0.5, seed=0, min_len_frac=0.5,
-                     max_energy_drift=1e-3, **kw):
+def generate_dataset(
+    n_traj=200,
+    T=20.0,
+    dt=0.01,
+    E0=-0.5,
+    seed=0,
+    min_len_frac=0.5,
+    max_energy_drift=1e-3,
+    **kw,
+):
     """Generate n_traj trajectories of (up to) T/dt+1 steps. Trajectories that are
     cut too early, or whose total energy drifts by more than max_energy_drift
     from E0 (solver not accurate enough), are discarded and replaced.
@@ -127,7 +146,10 @@ def generate_dataset(n_traj=200, T=20.0, dt=0.01, E0=-0.5, seed=0, min_len_frac=
         tried += 1
         s0 = sample_initial_condition(rng, E0=E0)
         traj, _ = simulate(s0, T, dt, **kw)
-        if len(traj) >= min_len and np.abs(total_energy(traj) - E0).max() <= max_energy_drift:
+        if (
+            len(traj) >= min_len
+            and np.abs(total_energy(traj) - E0).max() <= max_energy_drift
+        ):
             out.append(traj)
     print(f"generated {n_traj} trajectories ({tried} attempted)")
     return out
@@ -138,5 +160,5 @@ def pad_stack(trajs):
     L = max(len(t) for t in trajs)
     arr = np.full((len(trajs), L, 12), np.nan)
     for i, t in enumerate(trajs):
-        arr[i, :len(t)] = t
+        arr[i, : len(t)] = t
     return arr, np.array([len(t) for t in trajs])
