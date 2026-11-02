@@ -15,6 +15,8 @@ import numpy as np
 import optuna
 import torch
 from optuna.trial import Trial
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -30,12 +32,16 @@ AMOUNT_OPTUNA_TRIALS = 20
 CRITERION = nn.MSELoss()
 
 
-def objective(trial: Trial, device: str, X_train, Y_train, X_dev, Y_dev) -> float:
+def objective(
+    trial: Trial, device: str, X_train, Y_train, X_dev, Y_dev
+) -> float:
     study = trial.study
 
     learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-3, log=True)
     batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
-    amount_training_epochs = trial.suggest_int("amount_training_epochs", 20, 100)
+    amount_training_epochs = trial.suggest_int(
+        "amount_training_epochs", 20, 100
+    )
     hidden_size = trial.suggest_categorical("hidden_size", [32, 64, 128, 256])
 
     model_hyperparameters = {
@@ -54,7 +60,9 @@ def objective(trial: Trial, device: str, X_train, Y_train, X_dev, Y_dev) -> floa
     dev_dataset = TensorDataset(X_dev, Y_dev)
 
     # shuffle must be false to prevent future leaking to past
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=False
+    )
     dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
 
     patience = 5
@@ -97,7 +105,9 @@ def objective(trial: Trial, device: str, X_train, Y_train, X_dev, Y_dev) -> floa
             lowest_average_epoch_dev_loss = average_dev_loss
             patience_counter = 0
 
-            saved_best_checkpoint_info = study.user_attrs.get("best_checkpoint_info")
+            saved_best_checkpoint_info = study.user_attrs.get(
+                "best_checkpoint_info"
+            )
             if (
                 saved_best_checkpoint_info is None
                 or average_dev_loss < saved_best_checkpoint_info["loss"]
@@ -150,7 +160,9 @@ def main():
 
         min_length_trajectory = min(min_length_trajectory, length_trajectory)
 
-    trajectories = [trajectory[:min_length_trajectory] for trajectory in trajectories]
+    trajectories = [
+        trajectory[:min_length_trajectory] for trajectory in trajectories
+    ]
     trajectories = torch.tensor(np.array(trajectories), dtype=torch.float32)
 
     amount_trajectories = trajectories.size(0)
@@ -159,7 +171,9 @@ def main():
     dev_fraction = 0.2
 
     train_end_index = int(amount_trajectories * train_fraction)
-    validate_end_index = train_end_index + int(amount_trajectories * dev_fraction)
+    validate_end_index = train_end_index + int(
+        amount_trajectories * dev_fraction
+    )
 
     train_data = trajectories[0 : train_end_index + 1]
     dev_data = trajectories[train_end_index + 1 : validate_end_index + 1]
@@ -177,7 +191,8 @@ def main():
     test_dataset = TensorDataset(X_test, Y_test)
 
     study = optuna.create_study(
-        direction="minimize", sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED)
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
     )
 
     study.optimize(
@@ -196,8 +211,17 @@ def main():
     print(best_checkpoint_info)
 
     # shuffle must be false to prevent future leaking to past
-    test_batch_size = 256
-    test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+    test_batch_size = 64
+    test_loader = DataLoader(
+        test_dataset, batch_size=test_batch_size, shuffle=False
+    )
+
+    baseline_model = LinearRegression()
+    baseline_model.fit(X_train[0], Y_train[0])
+
+    prediction = baseline_model.predict(X_test[0])
+    mse = mean_squared_error(Y_test[0][:12][0], prediction[0])
+    print("mse: ", mse)
 
     end_time = time.perf_counter()
     time_elapsed = end_time - start_time
